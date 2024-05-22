@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+
+jobs:
+  CI:
+    name: Lint, build, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pre-commit
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pre-commit
+
+      - name: Configure pre-commit cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
+
+      - name: Install minimal nightly with clippy and rustfmt
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+
+      - name: Install tool for formatting Cargo.toml files
+        run: cargo install cargo-tomlfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+
+      - name: Check pre-commit hooks (formatting and Clippy)
+        run: pre-commit run --all
+
+      - name: Build in debug mode
+        run: |
+          cargo build
+
+      - name: Spin up the test object store and postgres server
+        run: docker compose up -d --wait || true
+
+      - name: Run tests
+        run: |
+          cargo test
+        env:
+          AWS_ALLOW_HTTP: "true"
+          AWS_ENDPOINT: http://localhost:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin

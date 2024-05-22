@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: test-user
+      POSTGRES_PASSWORD: test-password
+      POSTGRES_DB: test-db
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    volumes:
+      - ./tests/postgres-init-scripts:/docker-entrypoint-initdb.d
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - 9000:9000
+      - 9001:9001
+    environment:
+      MINIO_CONSOLE_ADDRESS: ":9001"
+    command: minio server /data
+
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add test-minio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc rm -r --force test-minio/sdl-test-bucket;
+      /usr/bin/mc mb test-minio/sdl-test-bucket;
+      /usr/bin/mc admin user add test-minio test-user test-pass;
+      /usr/bin/mc admin policy attach test-minio readwrite --user test-user;
+      exit 0; "
