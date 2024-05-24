@@ -30,5 +30,5 @@ Use the `file://` protocol to load data into a file instead.
 
 ## Limitations
 
-- Supported datatypes: bool, char, int2, int4, int8, float4, float8, timestamp, timestamptz, text, bytea. Cast the columns in your query to `text` or another supported type if your query returns different types
+- Supported datatypes: bool, char, int2, int4, int8, float4, float8, timestamp, timestamptz, date, text, bytea. Cast the columns in your query to `text` or another supported type if your query returns different types
 - Doesn't support appending to tables, only writing new Delta Tables (pass `-o` to overwrite)
