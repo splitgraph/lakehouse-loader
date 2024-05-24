@@ -1,6 +1,6 @@
 use arrow::array::{
-    Array, BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, StringArray, TimestampMicrosecondArray,
+    Array, BinaryArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, StringArray, TimestampMicrosecondArray,
 };
 use clap::Parser;
 use futures::{StreamExt, TryStreamExt};
@@ -195,9 +195,21 @@ async fn test_pg_arrow_source() {
         (elapsed_days * seconds_per_day + 2) * 1000000
     );
 
+    // THEN the first 3 date values should be as expected
+    let cdate_array = rb1
+        .column(10)
+        .as_any()
+        .downcast_ref::<Date32Array>()
+        .unwrap();
+    assert!(cdate_array.is_null(0));
+    assert!(!cdate_array.is_null(1));
+    assert_eq!(cdate_array.value(1), elapsed_days as i32 + 1);
+    assert!(!cdate_array.is_null(2));
+    assert_eq!(cdate_array.value(2), elapsed_days as i32 + 2);
+
     // THEN the first 3 text values should be as expected
     let ctext_array = rb1
-        .column(10)
+        .column(11)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
@@ -209,7 +221,7 @@ async fn test_pg_arrow_source() {
 
     // THEN the first 3 bytea values should be as expected
     let cbytea_array = rb1
-        .column(11)
+        .column(12)
         .as_any()
         .downcast_ref::<BinaryArray>()
         .unwrap();

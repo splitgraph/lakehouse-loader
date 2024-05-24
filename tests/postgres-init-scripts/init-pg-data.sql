@@ -9,6 +9,7 @@ CREATE TABLE t1(
   cfloat8 DOUBLE PRECISION,
   ctimestamp TIMESTAMP,
   ctimestamptz TIMESTAMPTZ,
+  cdate DATE,
   ctext TEXT,
   cbytea BYTEA
 );
@@ -25,6 +26,7 @@ INSERT INTO t1(
   cfloat8,
   ctimestamp,
   ctimestamptz,
+  cdate,
   ctext,
   cbytea
 ) SELECT
@@ -37,6 +39,7 @@ INSERT INTO t1(
   s + 0.5,
   '2024-01-01'::TIMESTAMP + s * INTERVAL '1 second',
   '2024-01-01 00:00:00+00'::TIMESTAMPTZ + s * INTERVAL '1 second',
+  '2024-01-01'::DATE + s,
   s::TEXT,
   int4send(s::INT)
 FROM generate_series(1, 25000) AS s;
