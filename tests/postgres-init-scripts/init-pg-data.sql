@@ -10,6 +10,7 @@ CREATE TABLE t1(
   ctimestamp TIMESTAMP,
   ctimestamptz TIMESTAMPTZ,
   cdate DATE,
+  cnumeric NUMERIC(8, 3),
   ctext TEXT,
   cbytea BYTEA
 );
@@ -27,6 +28,7 @@ INSERT INTO t1(
   ctimestamp,
   ctimestamptz,
   cdate,
+  cnumeric,
   ctext,
   cbytea
 ) SELECT
@@ -40,6 +42,17 @@ INSERT INTO t1(
   '2024-01-01'::TIMESTAMP + s * INTERVAL '1 second',
   '2024-01-01 00:00:00+00'::TIMESTAMPTZ + s * INTERVAL '1 second',
   '2024-01-01'::DATE + s,
+  s::NUMERIC / 1000,
   s::TEXT,
   int4send(s::INT)
 FROM generate_series(1, 25000) AS s;
+
+-- Set various cnumeric values
+UPDATE t1 SET cnumeric = 0 WHERE id = 2;
+UPDATE t1 SET cnumeric = 0.001 WHERE id = 3;
+UPDATE t1 SET cnumeric = -0.002 WHERE id = 4;
+UPDATE t1 SET cnumeric = 3 WHERE id = 5;
+UPDATE t1 SET cnumeric = -4 WHERE id = 6;
+UPDATE t1 SET cnumeric = 50.001 WHERE id = 7;
+UPDATE t1 SET cnumeric = 99999.999 WHERE id = 8;
+UPDATE t1 SET cnumeric = -99999.999 WHERE id = 9;

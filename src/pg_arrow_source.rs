@@ -24,9 +24,16 @@ pub enum ArrowBuilder {
     Float64Builder(array::Float64Builder),
     TimestampMicrosecondBuilder(array::TimestampMicrosecondBuilder),
     DateBuilder(array::Date32Builder),
+    DecimalBuilder {
+        builder: array::Decimal128Builder,
+        scale: i16,
+    },
     StringBuilder(array::StringBuilder),
     BinaryBuilder(array::BinaryBuilder),
 }
+use crate::pg_numeric::{
+    numeric_typmod_precision, numeric_typmod_scale, pg_numeric_to_arrow_decimal,
+};
 use crate::{ArrowBuilder::*, DataLoadingError};
 
 // tokio-postgres provides awkward Rust type conversions for Postgres TIMESTAMP and TIMESTAMPTZ values
@@ -73,9 +80,30 @@ impl From<UnixEpochMicrosecondOffset> for i64 {
     }
 }
 
+struct RawPgBinary(Vec<u8>);
+impl FromSql<'_> for RawPgBinary {
+    fn from_sql(_ty: &Type, buf: &[u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(RawPgBinary(buf.to_vec()))
+    }
+
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+}
+impl From<RawPgBinary> for Vec<u8> {
+    fn from(val: RawPgBinary) -> Self {
+        val.0
+    }
+}
+
+pub struct PgTypeInfo {
+    pg_type: Type,
+    type_modifier: i32,
+}
+
 impl ArrowBuilder {
-    pub fn from_pg_type(pg_type: &Type) -> Self {
-        match *pg_type {
+    pub fn from_pg_type(type_info: &PgTypeInfo) -> Self {
+        match type_info.pg_type {
             Type::BOOL => BooleanBuilder(array::BooleanBuilder::new()),
             Type::CHAR => Int8Builder(array::Int8Builder::new()),
             Type::INT2 => Int16Builder(array::Int16Builder::new()),
@@ -93,9 +121,23 @@ impl ArrowBuilder {
                 )),
             ),
             Type::DATE => DateBuilder(array::Date32Builder::new()),
+            Type::NUMERIC => {
+                let precision: u8 = numeric_typmod_precision(type_info.type_modifier)
+                    .try_into()
+                    .expect("Unsupported precision");
+                let scale: i8 = numeric_typmod_scale(type_info.type_modifier)
+                    .try_into()
+                    .expect("Unsupported scale");
+                DecimalBuilder {
+                    builder: array::Decimal128Builder::new()
+                        .with_precision_and_scale(precision, scale)
+                        .expect("Could not create Decimal128Builder"),
+                    scale: scale.into(),
+                }
+            }
             Type::TEXT => StringBuilder(array::StringBuilder::new()),
             Type::BYTEA => BinaryBuilder(array::BinaryBuilder::new()),
-            _ => panic!("Unsupported type: {}", pg_type),
+            _ => panic!("Unsupported type: {}", type_info.pg_type),
         }
     }
     // Append a value from a tokio-postgres row to the ArrowBuilder
@@ -130,6 +172,16 @@ impl ArrowBuilder {
                 row.get::<usize, Option<UnixEpochDayOffset>>(column_idx)
                     .map(UnixEpochDayOffset::into),
             ),
+            DecimalBuilder {
+                ref mut builder,
+                scale,
+            } => {
+                let maybe_raw_binary = row.get::<usize, Option<RawPgBinary>>(column_idx);
+                builder.append_option(maybe_raw_binary.map(|raw_binary| {
+                    let buf: Vec<u8> = raw_binary.into();
+                    pg_numeric_to_arrow_decimal(&buf, *scale)
+                }))
+            }
             StringBuilder(ref mut builder) => {
                 builder.append_option(row.get::<usize, Option<&str>>(column_idx))
             }
@@ -149,14 +201,15 @@ impl ArrowBuilder {
             Float64Builder(builder) => Arc::new(builder.finish()),
             TimestampMicrosecondBuilder(builder) => Arc::new(builder.finish()),
             DateBuilder(builder) => Arc::new(builder.finish()),
+            DecimalBuilder { builder, scale: _ } => Arc::new(builder.finish()),
             StringBuilder(builder) => Arc::new(builder.finish()),
             BinaryBuilder(builder) => Arc::new(builder.finish()),
         }
     }
 }
 
-fn pg_type_to_arrow_type(pg_type: &Type) -> DataType {
-    match *pg_type {
+fn pg_type_to_arrow_type(type_info: &PgTypeInfo) -> DataType {
+    match type_info.pg_type {
         Type::BOOL => DataType::Boolean,
         Type::CHAR => DataType::Int8,
         Type::INT2 => DataType::Int16,
@@ -167,16 +220,20 @@ fn pg_type_to_arrow_type(pg_type: &Type) -> DataType {
         Type::TIMESTAMP => DataType::Timestamp(TimeUnit::Microsecond, None),
         Type::TIMESTAMPTZ => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
         Type::DATE => DataType::Date32,
+        Type::NUMERIC => DataType::Decimal128(
+            numeric_typmod_precision(type_info.type_modifier).try_into().expect("Unsupported precision"),
+            numeric_typmod_scale(type_info.type_modifier).try_into().expect("Unsupported scale"),
+        ),
         Type::TEXT => DataType::Utf8,
         Type::BYTEA => DataType::Binary,
-        _ => panic!("Unsupported type: {}. Explicitly cast the relevant columns to text in order to store them as strings.", pg_type),
+        _ => panic!("Unsupported type: {}. Explicitly cast the relevant columns to text in order to store them as strings.", type_info.pg_type),
     }
 }
 
 pub struct PgArrowSource {
     batch_size: usize,
     pg_row_stream: Pin<Box<RowStream>>,
-    pg_types: Vec<Type>,
+    pg_types: Vec<PgTypeInfo>,
     arrow_schema: Arc<Schema>,
 }
 
@@ -211,7 +268,10 @@ impl PgArrowSource {
         let (pg_types, arrow_fields): (Vec<_>, Vec<_>) = postgres_columns
             .iter()
             .map(|c| {
-                let pg_type = c.type_().clone();
+                let pg_type = PgTypeInfo {
+                    pg_type: c.type_().clone(),
+                    type_modifier: c.type_modifier(),
+                };
                 let arrow_type = pg_type_to_arrow_type(&pg_type);
                 (pg_type, Field::new(c.name(), arrow_type, true))
             })

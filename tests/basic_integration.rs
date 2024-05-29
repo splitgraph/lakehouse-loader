@@ -1,6 +1,6 @@
 use arrow::array::{
-    Array, BinaryArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, StringArray, TimestampMicrosecondArray,
+    Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, StringArray, TimestampMicrosecondArray,
 };
 use clap::Parser;
 use futures::{StreamExt, TryStreamExt};
@@ -18,7 +18,7 @@ async fn test_pg_to_delta_e2e() {
         "pg-to-delta",
         "postgres://test-user:test-password@localhost:5432/test-db",
         "-q",
-        "select * from t1",
+        "select * from t1 order by id",
         target_url,
     ]);
     // THEN the command runs successfully
@@ -58,7 +58,7 @@ async fn test_pg_arrow_source() {
     // WHEN 25001 rows are split into batches of 10000
     let record_batches: Vec<_> = PgArrowSource::new(
         "postgres://test-user:test-password@localhost:5432/test-db",
-        "select * from t1",
+        "select * from t1 order by id",
         10000,
     )
     .await
@@ -207,9 +207,33 @@ async fn test_pg_arrow_source() {
     assert!(!cdate_array.is_null(2));
     assert_eq!(cdate_array.value(2), elapsed_days as i32 + 2);
 
+    // THEN the first few numeric values should be as expected
+    let cnumeric_array = rb1
+        .column(11)
+        .as_any()
+        .downcast_ref::<Decimal128Array>()
+        .unwrap();
+    assert!(cnumeric_array.is_null(0));
+    assert!(!cnumeric_array.is_null(1));
+    assert_eq!(cnumeric_array.value(1), 0_i128);
+    assert!(!cnumeric_array.is_null(2));
+    assert_eq!(cnumeric_array.value(2), 1_i128);
+    assert!(!cnumeric_array.is_null(3));
+    assert_eq!(cnumeric_array.value(3), -2_i128);
+    assert!(!cnumeric_array.is_null(4));
+    assert_eq!(cnumeric_array.value(4), 3000_i128);
+    assert!(!cnumeric_array.is_null(5));
+    assert_eq!(cnumeric_array.value(5), -4000_i128);
+    assert!(!cnumeric_array.is_null(6));
+    assert_eq!(cnumeric_array.value(6), 50001_i128);
+    assert!(!cnumeric_array.is_null(7));
+    assert_eq!(cnumeric_array.value(7), 99999999_i128);
+    assert!(!cnumeric_array.is_null(8));
+    assert_eq!(cnumeric_array.value(8), -99999999_i128);
+
     // THEN the first 3 text values should be as expected
     let ctext_array = rb1
-        .column(11)
+        .column(12)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
@@ -221,7 +245,7 @@ async fn test_pg_arrow_source() {
 
     // THEN the first 3 bytea values should be as expected
     let cbytea_array = rb1
-        .column(12)
+        .column(13)
         .as_any()
         .downcast_ref::<BinaryArray>()
         .unwrap();
