@@ -40,6 +40,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 pub mod pg_arrow_source;
+mod pg_numeric;
 use pg_arrow_source::{ArrowBuilder, PgArrowSource};
 
 #[derive(Debug, Parser)]
