@@ -2,6 +2,7 @@ use arrow::array::{
     Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
     Int16Array, Int32Array, Int64Array, Int8Array, StringArray, TimestampMicrosecondArray,
 };
+use arrow::datatypes::DataType;
 use clap::Parser;
 use futures::{StreamExt, TryStreamExt};
 use lakehouse_loader::pg_arrow_source::PgArrowSource;
@@ -206,6 +207,12 @@ async fn test_pg_arrow_source() {
     assert_eq!(cdate_array.value(1), elapsed_days as i32 + 1);
     assert!(!cdate_array.is_null(2));
     assert_eq!(cdate_array.value(2), elapsed_days as i32 + 2);
+
+    // THEN the numeric field data type should be as expected
+    assert_eq!(
+        *rb1.schema().field(11).data_type(),
+        DataType::Decimal128(8, 3)
+    );
 
     // THEN the first few numeric values should be as expected
     let cnumeric_array = rb1
