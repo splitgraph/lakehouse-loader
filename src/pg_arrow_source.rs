@@ -92,7 +92,7 @@ impl ArrowBuilder {
                     scale: scale.into(),
                 }
             }
-            Type::TEXT => StringBuilder(array::StringBuilder::new()),
+            Type::TEXT | Type::VARCHAR => StringBuilder(array::StringBuilder::new()),
             Type::BYTEA => BinaryBuilder(array::BinaryBuilder::new()),
             _ => panic!("Unsupported type: {}", type_info.pg_type),
         }
@@ -181,7 +181,7 @@ fn pg_type_to_arrow_type(type_info: &PgTypeInfo) -> DataType {
             numeric_typmod_precision(type_info.type_modifier).try_into().expect("Unsupported precision"),
             numeric_typmod_scale(type_info.type_modifier).try_into().expect("Unsupported scale"),
         ),
-        Type::TEXT => DataType::Utf8,
+        Type::TEXT | Type::VARCHAR => DataType::Utf8,
         Type::BYTEA => DataType::Binary,
         _ => panic!("Unsupported type: {}. Explicitly cast the relevant columns to text in order to store them as strings.", type_info.pg_type),
     }
