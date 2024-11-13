@@ -26,7 +26,7 @@ services:
       - minio
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc config host add test-minio http://minio:9000 minioadmin minioadmin;
+      until (/usr/bin/mc config host add test-minio http://minio:9000 minioadmin minioadmin) do echo '...waiting...' && sleep 1; done;
       /usr/bin/mc rm -r --force test-minio/sdl-test-bucket;
       /usr/bin/mc mb test-minio/sdl-test-bucket;
       /usr/bin/mc admin user add test-minio test-user test-pass;
