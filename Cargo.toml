@@ -5,20 +5,20 @@ edition = "2021"
 
 [dependencies]
 
-arrow = "50.0.0"
-arrow-buffer = "50.0.0"
-arrow-schema = "50.0.0"
+arrow = { version = "52" }
+arrow-buffer = { version = "52" }
+arrow-schema = { version = "52" }
 async-trait = "0.1"
 bytes = "1.4.0"
 clap = { version = "4.5", features = [ "derive" ] }
 config = "0.13.3"
-deltalake = "0.17.0"
+deltalake = { version = "0.21" }
 env_logger = "0.11.1"
 futures = "0.3"
 log = "0.4"
 native-tls = "0.2.11"
-object_store = { version = "0.9", features = ["aws"] }
-parquet = "50.0.0"
+object_store = { version = "0.10", features = ["aws"] }
+parquet = { version = "52" }
 postgres = { version = "0.19.7", git = "https://github.com/splitgraph/rust-postgres", rev = "88c2c7714a4558aed6a63e2e2b140a8359568858" }
 postgres-native-tls = { version = "0.5.0", git = "https://github.com/splitgraph/rust-postgres", rev = "88c2c7714a4558aed6a63e2e2b140a8359568858" }
 tempfile = "3"

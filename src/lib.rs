@@ -5,13 +5,15 @@ use clap::{Parser, Subcommand};
 use deltalake::kernel::{Action, Add, Protocol};
 use deltalake::logstore::{default_logstore, LogStore};
 use deltalake::operations::create::CreateBuilder;
-use deltalake::operations::transaction::commit;
+use deltalake::operations::transaction::CommitBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::storage::{factories, ObjectStoreFactory};
 use deltalake::DeltaResult;
 use futures::stream::iter;
 use futures::{pin_mut, TryStream, TryStreamExt};
 use futures::{stream::BoxStream, StreamExt};
+use object_store::aws::{AmazonS3ConfigKey, S3ConditionalPut};
+use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -23,8 +25,8 @@ use deltalake::writer::create_add;
 use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::{
-    prefix::PrefixStore, DynObjectStore, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, PutOptions, PutResult,
+    prefix::PrefixStore, DynObjectStore, GetOptions, GetResult, ListResult, ObjectMeta,
+    ObjectStore, PutOptions, PutResult,
 };
 use std::fmt::Display;
 use std::fs::File;
@@ -35,7 +37,7 @@ use url::Url;
 use std::sync::Arc;
 use tempfile::{NamedTempFile, TempPath};
 use tokio::fs::File as AsyncFile;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -209,7 +211,7 @@ pub async fn record_batches_to_object_store(
                 let mut reader = BufReader::with_capacity(PARTITION_FILE_BUFFER_SIZE, file);
                 let mut part_buffer = BytesMut::with_capacity(PARTITION_FILE_MIN_PART_SIZE);
 
-                let (multipart_id, mut writer) = store.put_multipart(&location).await?;
+                let mut multipart_upload = store.put_multipart(&location).await?;
 
                 let error: std::io::Error;
                 let mut eof_counter = 0;
@@ -239,12 +241,15 @@ pub async fn record_batches_to_object_store(
                         Ok(_) => {
                             let part_size = part_buffer.len();
                             debug!("Uploading part with {} bytes", part_size);
-                            match writer.write_all(&part_buffer[..part_size]).await {
+                            match multipart_upload
+                                .put_part(part_buffer[..part_size].to_vec().into())
+                                .await
+                            {
                                 Ok(_) => {
                                     part_buffer.clear();
                                     continue;
                                 }
-                                Err(err) => error = err,
+                                Err(err) => error = err.into(),
                             }
                         }
                         Err(err) => error = err,
@@ -254,15 +259,16 @@ pub async fn record_batches_to_object_store(
                         "Aborting multipart partition upload due to an error: {:?}",
                         error
                     );
-                    store.abort_multipart(&location, &multipart_id).await.ok();
+                    multipart_upload.abort().await?;
                     return Err(DataLoadingError::IoError(error));
                 }
 
-                writer.shutdown().await?;
+                multipart_upload.complete().await?;
 
                 // Create the corresponding Add action; currently we don't support partition columns
                 // which simplifies things.
-                let add = create_add(&Default::default(), file_name, size, &metadata).unwrap();
+                let add =
+                    create_add(&Default::default(), file_name, size, &metadata, -1, &None).unwrap();
 
                 Ok(add)
             });
@@ -315,8 +321,8 @@ impl ObjectStoreFactory for CompatObjectStore {
         &self,
         _url: &Url,
         _options: &deltalake::storage::StorageOptions,
-    ) -> DeltaResult<(deltalake::storage::ObjectStoreRef, Path)> {
-        Ok((self.inner.clone(), Path::from("/")))
+    ) -> DeltaResult<(deltalake::storage::ObjectStoreRef, deltalake::Path)> {
+        Ok((self.inner.clone(), deltalake::Path::from("/")))
     }
 }
 
@@ -335,32 +341,38 @@ impl CompatObjectStore {
 
 #[async_trait::async_trait]
 impl ObjectStore for CompatObjectStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> object_store::Result<PutResult> {
-        self.inner.put(location, bytes).await
+    async fn put(
+        &self,
+        location: &Path,
+        put_payload: PutPayload,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put(location, put_payload).await
     }
 
     async fn put_opts(
         &self,
         location: &Path,
-        bytes: Bytes,
+        put_payload: PutPayload,
         opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        self.inner.put_opts(location, bytes, opts).await
+        self.inner.put_opts(location, put_payload, opts).await
     }
 
     async fn put_multipart(
         &self,
         location: &Path,
-    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &Path,
-        multipart_id: &MultipartId,
-    ) -> object_store::Result<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        multipart_opts: PutMultipartOpts,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner
+            .put_multipart_opts(location, multipart_opts)
+            .await
     }
 
     async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
@@ -436,7 +448,11 @@ async fn record_batches_to_delta(
     target_url: Url,
     overwrite: bool,
 ) -> Result<(), DataLoadingError> {
-    let config = object_store_keys_from_env(target_url.scheme());
+    let mut config = object_store_keys_from_env(target_url.scheme());
+    config.push((
+        AmazonS3ConfigKey::ConditionalPut.as_ref().to_string(),
+        S3ConditionalPut::ETagMatch.to_string(),
+    ));
 
     // Handle some deltalake weirdness
     let (store, path) = object_store::parse_url_opts(&target_url, config).unwrap();
@@ -483,7 +499,7 @@ async fn record_batches_to_delta(
     let table = CreateBuilder::new()
         .with_log_store(log_store.clone())
         .with_table_name(table_name)
-        .with_columns(delta_schema.fields().clone())
+        .with_columns(delta_schema.fields().cloned())
         // Set the writer protocol to 1 (defaults to 2 which means that after this
         // we won't be able to write to the table without the datafusion crate support)
         .with_actions(vec![Action::Protocol(Protocol {
@@ -500,7 +516,12 @@ async fn record_batches_to_delta(
         partition_by: None,
         predicate: None,
     };
-    let version = commit(log_store.as_ref(), &actions, op, table.state.as_ref(), None).await?;
+    let version = CommitBuilder::default()
+        .with_actions(actions)
+        .build(Some(table.snapshot()?), table.log_store(), op)
+        .await?
+        .version;
+
     info!(
         "Created Delta Table {:?} at {:?}, version {:?}",
         table_name, target_url, version
