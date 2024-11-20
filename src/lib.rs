@@ -449,7 +449,10 @@ async fn record_batches_to_delta(
     overwrite: bool,
 ) -> Result<(), DataLoadingError> {
     let mut config = object_store_keys_from_env(target_url.scheme());
-    config.push((AmazonS3ConfigKey::ConditionalPut.as_ref().to_string(), S3ConditionalPut::ETagMatch.to_string()));
+    config.push((
+        AmazonS3ConfigKey::ConditionalPut.as_ref().to_string(),
+        S3ConditionalPut::ETagMatch.to_string(),
+    ));
 
     // Handle some deltalake weirdness
     let (store, path) = object_store::parse_url_opts(&target_url, config).unwrap();
