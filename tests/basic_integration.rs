@@ -5,8 +5,9 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use clap::Parser;
 use futures::{StreamExt, TryStreamExt};
+use lakehouse_loader::delta::object_store_keys_from_env;
 use lakehouse_loader::pg_arrow_source::PgArrowSource;
-use lakehouse_loader::{do_main, object_store_keys_from_env, Cli};
+use lakehouse_loader::{do_main, Cli};
 use object_store::path::Path;
 use url::Url;
 
