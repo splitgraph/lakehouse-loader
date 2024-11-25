@@ -5,15 +5,16 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use clap::Parser;
 use futures::{StreamExt, TryStreamExt};
-use lakehouse_loader::delta::object_store_keys_from_env;
+use lakehouse_loader::delta_destination::object_store_keys_from_env;
 use lakehouse_loader::pg_arrow_source::PgArrowSource;
 use lakehouse_loader::{do_main, Cli};
 use object_store::path::Path;
+use regex::Regex;
 use url::Url;
 
 #[tokio::test]
 async fn test_pg_to_delta_e2e() {
-    let target_url = "s3://sdl-test-bucket/abc";
+    let target_url = "s3://lhl-test-bucket/delta";
     // WHEN valid arguments are passed to the command
     let parsed_args = Cli::parse_from(vec![
         "lakehouse-loader",
@@ -28,11 +29,55 @@ async fn test_pg_to_delta_e2e() {
 
     let config = object_store_keys_from_env("s3");
 
-    // Handle some deltalake weirdness
     let (store, path) =
         object_store::parse_url_opts(&Url::parse(target_url).unwrap(), config).unwrap();
 
-    let paths = store
+    let mut paths = store
+        .list(Some(&path))
+        .map_ok(|m| m.location)
+        .boxed()
+        .try_collect::<Vec<Path>>()
+        .await
+        .unwrap();
+    paths.sort();
+
+    assert_eq!(paths.len(), 3);
+    // THEN delta log files are written
+    assert_eq!(
+        paths[0].to_string(),
+        "delta/_delta_log/00000000000000000000.json"
+    );
+    assert_eq!(
+        paths[1].to_string(),
+        "delta/_delta_log/00000000000000000001.json"
+    );
+    // THEN a delta content file is written
+    assert!(paths[2].to_string().starts_with("delta/part-00000-"));
+    assert!(paths[2].to_string().ends_with("-c000.snappy.parquet"));
+}
+
+#[tokio::test]
+async fn test_pg_to_iceberg() {
+    let target_url = "s3://lhl-test-bucket/iceberg";
+    // WHEN valid arguments are passed to the command
+    let parsed_args = Cli::parse_from(vec![
+        "lakehouse-loader",
+        "pg-to-iceberg",
+        "postgres://test-user:test-password@localhost:5432/test-db",
+        "-q",
+        // We have to cherry-pick fields as not all types are supported by iceberg
+        "select cint4, cint8, ctext, cbool from t1 order by id",
+        target_url,
+    ]);
+    // THEN the command runs successfully
+    do_main(parsed_args).await.unwrap();
+
+    let config = object_store_keys_from_env("s3");
+
+    let (store, path) =
+        object_store::parse_url_opts(&Url::parse(target_url).unwrap(), config).unwrap();
+
+    let mut paths = store
         .list(Some(&path))
         .map_ok(|m| m.location)
         .boxed()
@@ -40,19 +85,15 @@ async fn test_pg_to_delta_e2e() {
         .await
         .unwrap();
 
-    assert_eq!(paths.len(), 3);
-    // THEN delta log files are written
-    assert_eq!(
-        paths[0].to_string(),
-        "abc/_delta_log/00000000000000000000.json"
-    );
-    assert_eq!(
-        paths[1].to_string(),
-        "abc/_delta_log/00000000000000000001.json"
-    );
-    // THEN a delta content file is written
-    assert!(paths[2].to_string().starts_with("abc/part-00000-"));
-    assert!(paths[2].to_string().ends_with("-c000.snappy.parquet"));
+    paths.sort();
+
+    // THEN iceberg data and metadata files are written
+    assert_eq!(paths.len(), 5);
+    assert!(Regex::new(r"^iceberg/data/part-00000-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}.parquet$").unwrap().is_match(paths[0].as_ref()));
+    assert!(Regex::new(r"^iceberg/metadata/manifest-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}.avro$").unwrap().is_match(paths[1].as_ref()));
+    assert!(Regex::new(r"^iceberg/metadata/manifest-list-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}.avro$").unwrap().is_match(paths[2].as_ref()));
+    assert_eq!(&paths[3].to_string(), "iceberg/metadata/v0.metadata.json");
+    assert_eq!(&paths[4].to_string(), "iceberg/metadata/v1.metadata.json");
 }
 
 #[tokio::test]
