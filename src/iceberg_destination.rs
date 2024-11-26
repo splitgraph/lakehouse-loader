@@ -24,6 +24,33 @@ use uuid::Uuid;
 
 use crate::error::DataLoadingError;
 
+fn create_file_io(target_url: String) -> Result<FileIO, DataLoadingError> {
+    let mut file_io_props: Vec<(String, String)> = vec![];
+    if let Ok(aws_endpoint) = std::env::var("AWS_ENDPOINT") {
+        file_io_props.push(("s3.endpoint".to_string(), aws_endpoint));
+    }
+
+    let file_io = FileIO::from_path(target_url.clone())?
+        .with_props(file_io_props)
+        .build()?;
+    Ok(file_io)
+}
+
+// Create the v0 metadata object. This one will contain no snapshot
+fn create_metadata_v0(
+    iceberg_schema: &iceberg::spec::Schema,
+    target_url: String,
+) -> Result<TableMetadata, DataLoadingError> {
+    let table_creation = TableCreation::builder()
+        .name("dummy_name".to_string()) // Required by TableCreationBuilder. Doesn't affect output
+        .schema(iceberg_schema.clone())
+        .location(target_url.to_string())
+        .build();
+
+    let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+    Ok(table_metadata)
+}
+
 // Clone an arrow schema, assigning sequential field IDs starting from 1
 fn assign_field_ids(arrow_schema: Arc<Schema>) -> Schema {
     let mut field_id_counter = 1;
@@ -43,21 +70,6 @@ fn assign_field_ids(arrow_schema: Arc<Schema>) -> Schema {
         })
         .collect();
     Schema::new_with_metadata(new_fields, arrow_schema.metadata.clone())
-}
-
-// Create the v0 metadata object. This one will contain no snapshot
-fn create_metadata_v0(
-    iceberg_schema: &iceberg::spec::Schema,
-    target_url: String,
-) -> Result<TableMetadata, DataLoadingError> {
-    let table_creation = TableCreation::builder()
-        .name("dummy_name".to_string()) // Required by TableCreationBuilder. Doesn't affect output
-        .schema(iceberg_schema.clone())
-        .location(target_url.to_string())
-        .build();
-
-    let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
-    Ok(table_metadata)
 }
 
 // Create the v1 metadata object by adding a snapshot to the v0 metadata object
@@ -88,18 +100,9 @@ pub async fn record_batches_to_iceberg(
 ) -> Result<(), DataLoadingError> {
     pin_mut!(record_batch_stream);
 
-    let mut file_io_props: Vec<(String, String)> = vec![];
-    if let Ok(aws_endpoint) = std::env::var("AWS_ENDPOINT") {
-        file_io_props.push(("s3.endpoint".to_string(), aws_endpoint));
-    }
-
-    let file_io = FileIO::from_path(target_url.clone())?
-        .with_props(file_io_props)
-        .build()?;
-
+    let file_io = create_file_io(target_url.to_string())?;
     let arrow_schema_with_ids = assign_field_ids(arrow_schema.clone());
     let iceberg_schema = iceberg::arrow::arrow_schema_to_schema(&arrow_schema_with_ids)?;
-
     let metadata_v0 = create_metadata_v0(&iceberg_schema, target_url.to_string())?;
     let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url);
 
