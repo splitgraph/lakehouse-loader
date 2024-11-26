@@ -24,6 +24,63 @@ use uuid::Uuid;
 
 use crate::error::DataLoadingError;
 
+// Clone an arrow schema, assigning sequential field IDs starting from 1
+fn assign_field_ids(arrow_schema: Arc<Schema>) -> Schema {
+    let mut field_id_counter = 1;
+    let new_fields: Vec<Field> = arrow_schema
+        .fields
+        .iter()
+        .map(|field_ref| {
+            let mut field: Field = (**field_ref).clone();
+            let mut metadata = field_ref.metadata().clone();
+            metadata.insert(
+                PARQUET_FIELD_ID_META_KEY.to_owned(),
+                field_id_counter.to_string(),
+            );
+            field_id_counter += 1;
+            field.set_metadata(metadata);
+            field
+        })
+        .collect();
+    Schema::new_with_metadata(new_fields, arrow_schema.metadata.clone())
+}
+
+// Create the v0 metadata object. This one will contain no snapshot
+fn create_metadata_v0(
+    iceberg_schema: &iceberg::spec::Schema,
+    target_url: String,
+) -> Result<TableMetadata, DataLoadingError> {
+    let table_creation = TableCreation::builder()
+        .name("dummy_name".to_string()) // Required by TableCreationBuilder. Doesn't affect output
+        .schema(iceberg_schema.clone())
+        .location(target_url.to_string())
+        .build();
+
+    let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+    Ok(table_metadata)
+}
+
+// Create the v1 metadata object by adding a snapshot to the v0 metadata object
+fn create_metadata_v1(
+    metadata_v0: &TableMetadata,
+    snapshot: Snapshot,
+) -> Result<TableMetadata, DataLoadingError> {
+    let snapshot_id = snapshot.snapshot_id();
+    // Copy metadata v0, modifying current snapshot ID
+    let mut metadata_v0_json = serde_json::to_value(metadata_v0).unwrap();
+    if let Some(obj) = metadata_v0_json.as_object_mut() {
+        obj.insert(
+            "current-snapshot-id".to_string(),
+            serde_json::Value::from(snapshot_id),
+        );
+    }
+    let mut metadata_v1: TableMetadata = serde_json::from_value(metadata_v0_json).unwrap();
+    metadata_v1.append_snapshot(snapshot);
+    Ok(metadata_v1)
+}
+
+const DEFAULT_SCHEMA_ID: i32 = 0;
+
 pub async fn record_batches_to_iceberg(
     record_batch_stream: impl TryStream<Item = Result<RecordBatch, DataLoadingError>>,
     arrow_schema: SchemaRef,
@@ -40,35 +97,10 @@ pub async fn record_batches_to_iceberg(
         .with_props(file_io_props)
         .build()?;
 
-    // Assign sequential field IDs starting from 1 to the fields
-    let mut field_id_counter = 1;
-    let fields: Vec<Field> = arrow_schema
-        .fields
-        .iter()
-        .map(|field_ref| {
-            let mut field: Field = (**field_ref).clone();
-            let mut metadata = field_ref.metadata().clone();
-            metadata.insert(
-                PARQUET_FIELD_ID_META_KEY.to_owned(),
-                field_id_counter.to_string(),
-            );
-            field_id_counter += 1;
-            field.set_metadata(metadata);
-            field
-        })
-        .collect();
+    let arrow_schema_with_ids = assign_field_ids(arrow_schema.clone());
+    let iceberg_schema = iceberg::arrow::arrow_schema_to_schema(&arrow_schema_with_ids)?;
 
-    let cloned_arrow_schema = Schema::new_with_metadata(fields, arrow_schema.metadata.clone());
-
-    let iceberg_schema = iceberg::arrow::arrow_schema_to_schema(&cloned_arrow_schema)?;
-
-    let table_creation = TableCreation::builder()
-        .name("dummy_name".to_string()) // Required by TableCreationBuilder. Doesn't affect output
-        .schema(iceberg_schema.clone())
-        .location(target_url.to_string())
-        .build();
-
-    let metadata_v0 = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+    let metadata_v0 = create_metadata_v0(&iceberg_schema, target_url.to_string())?;
     let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url);
 
     file_io
@@ -111,14 +143,13 @@ pub async fn record_batches_to_iceberg(
 
     let snapshot_id = fastrand::i64(..);
     let sequence_number = 1;
-    let schema_id = 0; // DEFAULT_SCHEMA_ID
 
     let manifest_file_path = format!("{}/metadata/manifest-{}.avro", target_url, Uuid::new_v4());
     let manifest_file_output = file_io.new_output(manifest_file_path)?;
     let manifest_writer: ManifestWriter =
         ManifestWriter::new(manifest_file_output, snapshot_id, vec![]);
     let manifest_metadata = ManifestMetadata::builder()
-        .schema_id(schema_id)
+        .schema_id(DEFAULT_SCHEMA_ID)
         .schema(iceberg_schema.clone())
         .partition_spec(
             PartitionSpec::builder(&iceberg_schema)
@@ -162,7 +193,7 @@ pub async fn record_batches_to_iceberg(
 
     let snapshot = Snapshot::builder()
         .with_snapshot_id(snapshot_id)
-        .with_schema_id(schema_id)
+        .with_schema_id(DEFAULT_SCHEMA_ID)
         .with_manifest_list(manifest_list_path.clone())
         .with_sequence_number(sequence_number)
         .with_timestamp_ms(
@@ -177,18 +208,7 @@ pub async fn record_batches_to_iceberg(
         })
         .build();
 
-    // Copy metadata v0, modifying current snapshot ID
-    let mut metadata_v0_json = serde_json::to_value(&metadata_v0).unwrap();
-    if let Some(obj) = metadata_v0_json.as_object_mut() {
-        obj.insert(
-            "current-snapshot-id".to_string(),
-            serde_json::Value::from(snapshot_id),
-        );
-    }
-    let mut metadata_v1: TableMetadata = serde_json::from_value(metadata_v0_json).unwrap();
-
-    metadata_v1.append_snapshot(snapshot);
-
+    let metadata_v1 = create_metadata_v1(&metadata_v0, snapshot)?;
     let metadata_v1_location = format!("{}/metadata/v1.metadata.json", target_url,);
 
     file_io
