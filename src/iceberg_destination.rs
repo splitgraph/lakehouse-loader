@@ -69,7 +69,7 @@ pub async fn record_batches_to_iceberg(
         .build();
 
     let metadata_v0 = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
-    let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url,);
+    let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url);
 
     file_io
         .new_output(&metadata_v0_location)?
