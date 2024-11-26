@@ -10,6 +10,8 @@ pub enum DataLoadingError {
     ArrowError(#[from] arrow::error::ArrowError),
     #[error("Delta Table error")]
     DeltaTableError(#[from] deltalake::DeltaTableError),
+    #[error("Iceberg error")]
+    IcebergError(#[from] iceberg::Error),
     #[error("I/O error")]
     IoError(#[from] std::io::Error),
     #[error("Object store error")]

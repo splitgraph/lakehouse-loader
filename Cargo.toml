@@ -14,19 +14,25 @@ clap = { version = "4.5", features = [ "derive" ] }
 config = "0.13.3"
 deltalake = { version = "0.21" }
 env_logger = "0.11.1"
+fastrand = "2.2.0"
 futures = "0.3"
+iceberg = "0.3.0"
 log = "0.4"
 native-tls = "0.2.11"
 object_store = { version = "0.10", features = ["aws"] }
 parquet = { version = "52" }
 postgres = { version = "0.19.7", git = "https://github.com/splitgraph/rust-postgres", rev = "88c2c7714a4558aed6a63e2e2b140a8359568858" }
 postgres-native-tls = { version = "0.5.0", git = "https://github.com/splitgraph/rust-postgres", rev = "88c2c7714a4558aed6a63e2e2b140a8359568858" }
+serde_json = "1"
 tempfile = "3"
 thiserror = "1"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 tokio-postgres = { version = "0.7.10", git = "https://github.com/splitgraph/rust-postgres", rev = "88c2c7714a4558aed6a63e2e2b140a8359568858" }
 url = "2.5.0"
 uuid = "1.2.1"
+
+[dev-dependencies]
+regex = "1.11"
 
 [profile.release]
 codegen-units = 1
