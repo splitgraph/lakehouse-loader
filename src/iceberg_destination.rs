@@ -225,5 +225,12 @@ pub async fn record_batches_to_iceberg(
         .await?;
     info!("Wrote v1 metadata: {:?}", metadata_v1_location);
 
+    let version_hint_location = format!("{}/metadata/version-hint.text", target_url,);
+    file_io
+        .new_output(&version_hint_location)?
+        .write("1".to_string().into())
+        .await?;
+    info!("Wrote version hint: {:?}", version_hint_location);
+
     Ok(())
 }
