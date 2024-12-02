@@ -112,9 +112,8 @@ pub async fn record_batches_to_iceberg(
     let version_hint_location = format!("{}/metadata/version-hint.text", target_url);
     if file_io
         .new_input(&version_hint_location)?
-        .read()
+        .exists()
         .await
-        .is_ok()
     {
         return Err(DataLoadingError::IcebergError(iceberg::Error::new(
             iceberg::ErrorKind::FeatureUnsupported,
