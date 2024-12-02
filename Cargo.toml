@@ -5,22 +5,22 @@ edition = "2021"
 
 [dependencies]
 
-arrow = { version = "52" }
-arrow-buffer = { version = "52" }
-arrow-schema = { version = "52" }
+arrow = { version = "53" }
+arrow-buffer = { version = "53" }
+arrow-schema = { version = "53" }
 async-trait = "0.1"
 bytes = "1.4.0"
 clap = { version = "4.5", features = [ "derive" ] }
 config = "0.13.3"
-deltalake = { version = "0.21" }
+deltalake = { version = "0.22" }
 env_logger = "0.11.1"
 fastrand = "2.2.0"
 futures = "0.3"
-iceberg = "0.3.0"
+iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "eeca14d13b23f2a92e57f503c141a860a3407226" }
 log = "0.4"
 native-tls = "0.2.11"
-object_store = { version = "0.10", features = ["aws"] }
-parquet = { version = "52" }
+object_store = { version = "0.11", features = ["aws"] }
+parquet = { version = "53" }
 postgres = { version = "0.19.7", git = "https://github.com/splitgraph/rust-postgres", rev = "88c2c7714a4558aed6a63e2e2b140a8359568858" }
 postgres-native-tls = { version = "0.5.0", git = "https://github.com/splitgraph/rust-postgres", rev = "88c2c7714a4558aed6a63e2e2b140a8359568858" }
 serde_json = "1"

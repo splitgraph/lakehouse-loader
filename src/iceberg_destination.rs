@@ -7,9 +7,10 @@ use arrow_schema::{Field, Schema, SchemaRef};
 use futures::{pin_mut, StreamExt, TryStream};
 use iceberg::io::FileIO;
 use iceberg::spec::{
-    DataContentType, DataFileFormat, FormatVersion, Manifest, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestMetadata, ManifestStatus, ManifestWriter, Operation,
-    PartitionSpec, Snapshot, Struct, Summary, TableMetadata, TableMetadataBuilder,
+    BoundPartitionSpec, DataContentType, DataFileFormat, FormatVersion, Manifest,
+    ManifestContentType, ManifestEntry, ManifestFile, ManifestListWriter, ManifestMetadata,
+    ManifestStatus, ManifestWriter, Operation, Snapshot, Struct, Summary, TableMetadata,
+    TableMetadataBuilder,
 };
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
@@ -78,16 +79,18 @@ fn create_metadata_v1(
     snapshot: Snapshot,
 ) -> Result<TableMetadata, DataLoadingError> {
     let snapshot_id = snapshot.snapshot_id();
+    let mut metadata = metadata_v0.clone();
+    metadata.append_snapshot(snapshot);
+
     // Copy metadata v0, modifying current snapshot ID
-    let mut metadata_v0_json = serde_json::to_value(metadata_v0).unwrap();
-    if let Some(obj) = metadata_v0_json.as_object_mut() {
+    let mut metadata_json = serde_json::to_value(metadata).unwrap();
+    if let Some(obj) = metadata_json.as_object_mut() {
         obj.insert(
             "current-snapshot-id".to_string(),
             serde_json::Value::from(snapshot_id),
         );
     }
-    let mut metadata_v1: TableMetadata = serde_json::from_value(metadata_v0_json).unwrap();
-    metadata_v1.append_snapshot(snapshot);
+    let metadata_v1: TableMetadata = serde_json::from_value(metadata_json).unwrap();
     Ok(metadata_v1)
 }
 
@@ -102,7 +105,9 @@ pub async fn record_batches_to_iceberg(
 
     let file_io = create_file_io(target_url.to_string())?;
     let arrow_schema_with_ids = assign_field_ids(arrow_schema.clone());
-    let iceberg_schema = iceberg::arrow::arrow_schema_to_schema(&arrow_schema_with_ids)?;
+    let iceberg_schema = Arc::new(iceberg::arrow::arrow_schema_to_schema(
+        &arrow_schema_with_ids,
+    )?);
     let metadata_v0 = create_metadata_v0(&iceberg_schema, target_url.to_string())?;
     let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url);
 
@@ -114,7 +119,7 @@ pub async fn record_batches_to_iceberg(
 
     let file_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::builder().build(),
-        Arc::new(iceberg_schema.clone()),
+        iceberg_schema.clone(),
         file_io.clone(),
         DefaultLocationGenerator::new(metadata_v0.clone()).unwrap(),
         DefaultFileNameGenerator::new(
@@ -155,7 +160,7 @@ pub async fn record_batches_to_iceberg(
         .schema_id(DEFAULT_SCHEMA_ID)
         .schema(iceberg_schema.clone())
         .partition_spec(
-            PartitionSpec::builder(&iceberg_schema)
+            BoundPartitionSpec::builder(iceberg_schema.clone())
                 .with_spec_id(0)
                 .build()?,
         )
