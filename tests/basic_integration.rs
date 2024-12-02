@@ -6,6 +6,7 @@ use arrow::datatypes::DataType;
 use clap::Parser;
 use futures::{StreamExt, TryStreamExt};
 use lakehouse_loader::delta_destination::object_store_keys_from_env;
+use lakehouse_loader::error::DataLoadingError;
 use lakehouse_loader::pg_arrow_source::PgArrowSource;
 use lakehouse_loader::{do_main, Cli};
 use object_store::path::Path;
@@ -60,7 +61,7 @@ async fn test_pg_to_delta_e2e() {
 async fn test_pg_to_iceberg() {
     let target_url = "s3://lhl-test-bucket/iceberg";
     // WHEN valid arguments are passed to the command
-    let parsed_args = Cli::parse_from(vec![
+    let args = vec![
         "lakehouse-loader",
         "pg-to-iceberg",
         "postgres://test-user:test-password@localhost:5432/test-db",
@@ -68,9 +69,9 @@ async fn test_pg_to_iceberg() {
         // We have to cherry-pick fields as not all types are supported by iceberg
         "select cint4, cint8, ctext, cbool from t1 order by id",
         target_url,
-    ]);
+    ];
     // THEN the command runs successfully
-    do_main(parsed_args).await.unwrap();
+    do_main(Cli::parse_from(args.clone())).await.unwrap();
 
     let config = object_store_keys_from_env("s3");
 
@@ -95,6 +96,18 @@ async fn test_pg_to_iceberg() {
     assert_eq!(&paths[3].to_string(), "iceberg/metadata/v0.metadata.json");
     assert_eq!(&paths[4].to_string(), "iceberg/metadata/v1.metadata.json");
     assert_eq!(&paths[5].to_string(), "iceberg/metadata/version-hint.text");
+
+    // WHEN we try to write to an existing table
+    // THEN the command errors out
+    match do_main(Cli::parse_from(args.clone())).await {
+        Err(DataLoadingError::IcebergError(e)) => {
+            assert!(e.kind() == iceberg::ErrorKind::FeatureUnsupported);
+        }
+        Err(e) => {
+            panic!("Unexpected error type: {:?}", e);
+        }
+        Ok(_) => panic!("Expected command to fail but it succeeded"),
+    };
 }
 
 #[tokio::test]

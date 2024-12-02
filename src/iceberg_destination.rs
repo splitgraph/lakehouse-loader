@@ -108,6 +108,15 @@ pub async fn record_batches_to_iceberg(
     let iceberg_schema = Arc::new(iceberg::arrow::arrow_schema_to_schema(
         &arrow_schema_with_ids,
     )?);
+
+    let version_hint_location = format!("{}/metadata/version-hint.text", target_url);
+    if let Ok(_) = file_io.new_input(&version_hint_location)?.read().await {
+        return Err(DataLoadingError::IcebergError(iceberg::Error::new(
+            iceberg::ErrorKind::FeatureUnsupported,
+            "Iceberg table already exists. Writing to an existing table is not implemented",
+        )));
+    };
+
     let metadata_v0 = create_metadata_v0(&iceberg_schema, target_url.to_string())?;
     let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url);
 
@@ -217,7 +226,7 @@ pub async fn record_batches_to_iceberg(
         .build();
 
     let metadata_v1 = create_metadata_v1(&metadata_v0, snapshot)?;
-    let metadata_v1_location = format!("{}/metadata/v1.metadata.json", target_url,);
+    let metadata_v1_location = format!("{}/metadata/v1.metadata.json", target_url);
 
     file_io
         .new_output(&metadata_v1_location)?
@@ -225,7 +234,6 @@ pub async fn record_batches_to_iceberg(
         .await?;
     info!("Wrote v1 metadata: {:?}", metadata_v1_location);
 
-    let version_hint_location = format!("{}/metadata/version-hint.text", target_url,);
     file_io
         .new_output(&version_hint_location)?
         .write("1".to_string().into())
