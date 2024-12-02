@@ -110,11 +110,7 @@ pub async fn record_batches_to_iceberg(
     )?);
 
     let version_hint_location = format!("{}/metadata/version-hint.text", target_url);
-    if file_io
-        .new_input(&version_hint_location)?
-        .exists()
-        .await
-    {
+    if file_io.new_input(&version_hint_location)?.exists().await? {
         return Err(DataLoadingError::IcebergError(iceberg::Error::new(
             iceberg::ErrorKind::FeatureUnsupported,
             "Iceberg table already exists. Writing to an existing table is not implemented",
