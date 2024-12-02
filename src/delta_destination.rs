@@ -207,8 +207,15 @@ pub async fn record_batches_to_object_store(
 
                 // Create the corresponding Add action; currently we don't support partition columns
                 // which simplifies things.
-                let add =
-                    create_add(&Default::default(), file_name, size, &metadata, -1, &None).unwrap();
+                let add = create_add(
+                    &Default::default(),
+                    file_name,
+                    size,
+                    &metadata,
+                    -1,
+                    &None::<Vec<&str>>,
+                )
+                .unwrap();
 
                 Ok(add)
             });
