@@ -9,8 +9,8 @@ use iceberg::io::FileIO;
 use iceberg::spec::{
     BoundPartitionSpec, DataContentType, DataFileFormat, FormatVersion, Manifest,
     ManifestContentType, ManifestEntry, ManifestFile, ManifestListWriter, ManifestMetadata,
-    ManifestStatus, ManifestWriter, Operation, Snapshot, Struct, Summary, TableMetadata,
-    TableMetadataBuilder,
+    ManifestStatus, ManifestWriter, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+    Struct, Summary, TableMetadata, TableMetadataBuilder,
 };
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
@@ -49,7 +49,7 @@ fn create_metadata_v0(
         .build();
 
     let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
-    Ok(table_metadata)
+    Ok(table_metadata.into())
 }
 
 // Clone an arrow schema, assigning sequential field IDs starting from 1
@@ -76,21 +76,19 @@ fn assign_field_ids(arrow_schema: Arc<Schema>) -> Schema {
 // Create the v1 metadata object by adding a snapshot to the v0 metadata object
 fn create_metadata_v1(
     metadata_v0: &TableMetadata,
+    metadata_v0_location: String,
     snapshot: Snapshot,
 ) -> Result<TableMetadata, DataLoadingError> {
     let snapshot_id = snapshot.snapshot_id();
-    let mut metadata = metadata_v0.clone();
-    metadata.append_snapshot(snapshot);
-
-    // Copy metadata v0, modifying current snapshot ID
-    let mut metadata_json = serde_json::to_value(metadata).unwrap();
-    if let Some(obj) = metadata_json.as_object_mut() {
-        obj.insert(
-            "current-snapshot-id".to_string(),
-            serde_json::Value::from(snapshot_id),
-        );
-    }
-    let metadata_v1: TableMetadata = serde_json::from_value(metadata_json).unwrap();
+    let metadata_v1: TableMetadata =
+        TableMetadataBuilder::new_from_metadata(metadata_v0.clone(), Some(metadata_v0_location))
+            .add_snapshot(snapshot)?
+            .set_ref(
+                "main",
+                SnapshotReference::new(snapshot_id, SnapshotRetention::branch(None, None, None)),
+            )?
+            .build()?
+            .into();
     Ok(metadata_v1)
 }
 
@@ -198,12 +196,8 @@ pub async fn record_batches_to_iceberg(
         Uuid::new_v4()
     );
     let manifest_file_output = file_io.new_output(manifest_list_path.clone())?;
-    let mut manifest_list_writer: ManifestListWriter = ManifestListWriter::v2(
-        manifest_file_output,
-        snapshot_id,
-        -1, // parent_snapshot_id is optional. Ideally ManifestListWriter wouldn't write it at all
-        sequence_number,
-    );
+    let mut manifest_list_writer: ManifestListWriter =
+        ManifestListWriter::v2(manifest_file_output, snapshot_id, None, sequence_number);
     manifest_list_writer.add_manifests(vec![manifest_file].into_iter())?;
     manifest_list_writer.close().await?;
     info!("Wrote manifest list: {:?}", manifest_list_path);
@@ -221,11 +215,11 @@ pub async fn record_batches_to_iceberg(
         )
         .with_summary(Summary {
             operation: Operation::Append,
-            other: HashMap::new(),
+            additional_properties: HashMap::new(),
         })
         .build();
 
-    let metadata_v1 = create_metadata_v1(&metadata_v0, snapshot)?;
+    let metadata_v1 = create_metadata_v1(&metadata_v0, metadata_v0_location, snapshot)?;
     let metadata_v1_location = format!("{}/metadata/v1.metadata.json", target_url);
 
     file_io
