@@ -38,8 +38,8 @@ fn create_file_io(target_url: String) -> Result<FileIO, DataLoadingError> {
     Ok(file_io)
 }
 
-// Create the v0 metadata object. This one will contain no snapshot
-fn create_metadata_v0(
+// Create an empty table metadata object that contains no snapshots
+fn create_empty_metadata(
     iceberg_schema: &iceberg::spec::Schema,
     target_url: String,
 ) -> Result<TableMetadata, DataLoadingError> {
@@ -74,23 +74,25 @@ fn assign_field_ids(arrow_schema: Arc<Schema>) -> Schema {
     Schema::new_with_metadata(new_fields, arrow_schema.metadata.clone())
 }
 
-// Create the v1 metadata object by adding a snapshot to the v0 metadata object
-fn create_metadata_v1(
-    metadata_v0: &TableMetadata,
-    metadata_v0_location: String,
+// Create a new TableMetadata object by updating the current snapshot of an existing TableMetadata
+fn update_metadata_snapshot(
+    previous_metadata: &TableMetadata,
+    previous_metadata_location: Option<String>,
     snapshot: Snapshot,
 ) -> Result<TableMetadata, DataLoadingError> {
     let snapshot_id = snapshot.snapshot_id();
-    let metadata_v1: TableMetadata =
-        TableMetadataBuilder::new_from_metadata(metadata_v0.clone(), Some(metadata_v0_location))
-            .add_snapshot(snapshot)?
-            .set_ref(
-                "main",
-                SnapshotReference::new(snapshot_id, SnapshotRetention::branch(None, None, None)),
-            )?
-            .build()?
-            .into();
-    Ok(metadata_v1)
+    let new_metadata: TableMetadata = TableMetadataBuilder::new_from_metadata(
+        previous_metadata.clone(),
+        previous_metadata_location,
+    )
+    .add_snapshot(snapshot)?
+    .set_ref(
+        "main",
+        SnapshotReference::new(snapshot_id, SnapshotRetention::branch(None, None, None)),
+    )?
+    .build()?
+    .into();
+    Ok(new_metadata)
 }
 
 const DEFAULT_SCHEMA_ID: i32 = 0;
@@ -135,7 +137,7 @@ pub async fn record_batches_to_iceberg(
         None
     };
 
-    let (old_metadata, old_metadata_location) = match old_version_hint {
+    let (previous_metadata, previous_metadata_location) = match old_version_hint {
         Some(version_hint) => {
             let old_metadata_location =
                 format!("{}/metadata/v{}.metadata.json", target_url, version_hint);
@@ -159,17 +161,11 @@ pub async fn record_batches_to_iceberg(
                     "Schema changes not supported",
                 )));
             }
-            (old_metadata, old_metadata_location)
+            (old_metadata, Some(old_metadata_location))
         }
         None => {
-            let metadata_v0 = create_metadata_v0(&iceberg_schema, target_url.to_string())?;
-            let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url);
-            file_io
-                .new_output(&metadata_v0_location)?
-                .write_exclusive(serde_json::to_vec(&metadata_v0).unwrap().into())
-                .await?;
-            info!("Wrote v0 metadata: {:?}", metadata_v0_location);
-            (metadata_v0, metadata_v0_location)
+            let empty_metadata = create_empty_metadata(&iceberg_schema, target_url.to_string())?;
+            (empty_metadata, None)
         }
     };
 
@@ -177,7 +173,7 @@ pub async fn record_batches_to_iceberg(
         WriterProperties::builder().build(),
         iceberg_schema.clone(),
         file_io.clone(),
-        DefaultLocationGenerator::new(old_metadata.clone()).unwrap(),
+        DefaultLocationGenerator::new(previous_metadata.clone()).unwrap(),
         DefaultFileNameGenerator::new(
             "part".to_string(),
             Some(Uuid::new_v4().to_string()),
@@ -268,10 +264,11 @@ pub async fn record_batches_to_iceberg(
         })
         .build();
 
-    let new_metadata = create_metadata_v1(&old_metadata, old_metadata_location, snapshot)?;
+    let new_metadata =
+        update_metadata_snapshot(&previous_metadata, previous_metadata_location, snapshot)?;
     let new_version_hint = match old_version_hint {
         Some(x) => x + 1,
-        None => 1,
+        None => 0,
     };
     let new_metadata_location = format!(
         "{}/metadata/v{}.metadata.json",
