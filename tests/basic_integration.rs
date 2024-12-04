@@ -97,8 +97,37 @@ async fn test_pg_to_iceberg() {
     assert_eq!(&paths[4].to_string(), "iceberg/metadata/v1.metadata.json");
     assert_eq!(&paths[5].to_string(), "iceberg/metadata/version-hint.text");
 
-    // WHEN we try to write to an existing table
+    // WHEN we try to write to an existing table without passing the overwrite flag
     // THEN the command errors out
+    let args = vec![
+        "lakehouse-loader",
+        "pg-to-iceberg",
+        "postgres://test-user:test-password@localhost:5432/test-db",
+        "-q",
+        "select cint4, cint8 + 1 cint8, ctext, cbool from t1 order by id",
+        target_url,
+    ];
+    match do_main(Cli::parse_from(args.clone())).await {
+        Err(DataLoadingError::IoError(e)) => {
+            assert!(e.kind() == std::io::ErrorKind::Other);
+        }
+        Err(e) => {
+            panic!("Unexpected error type: {:?}", e);
+        }
+        Ok(_) => panic!("Expected command to fail but it succeeded"),
+    };
+
+    // WHEN we try to write to an existing table with a different schema
+    // THEN the command errors out
+    let args = vec![
+        "lakehouse-loader",
+        "pg-to-iceberg",
+        "postgres://test-user:test-password@localhost:5432/test-db",
+        "-q",
+        "select cint4, cint8 cint8_newname, ctext, cbool from t1 order by id",
+        target_url,
+        "--overwrite",
+    ];
     match do_main(Cli::parse_from(args.clone())).await {
         Err(DataLoadingError::IcebergError(e)) => {
             assert!(e.kind() == iceberg::ErrorKind::FeatureUnsupported);
@@ -108,6 +137,19 @@ async fn test_pg_to_iceberg() {
         }
         Ok(_) => panic!("Expected command to fail but it succeeded"),
     };
+
+    // WHEN we try to write to an existing table with the same schema
+    // THEN the command succeeds
+    let args = vec![
+        "lakehouse-loader",
+        "pg-to-iceberg",
+        "postgres://test-user:test-password@localhost:5432/test-db",
+        "-q",
+        "select cint4, cint8 + 1 cint8, ctext, cbool from t1 order by id",
+        target_url,
+        "--overwrite",
+    ];
+    assert!(do_main(Cli::parse_from(args.clone())).await.is_ok());
 }
 
 #[tokio::test]
