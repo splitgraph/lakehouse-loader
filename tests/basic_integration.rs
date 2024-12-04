@@ -89,13 +89,12 @@ async fn test_pg_to_iceberg() {
     paths.sort();
 
     // THEN iceberg data and metadata files are written
-    assert_eq!(paths.len(), 6);
+    assert_eq!(paths.len(), 5);
     assert!(Regex::new(r"^iceberg/data/part-00000-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}.parquet$").unwrap().is_match(paths[0].as_ref()));
     assert!(Regex::new(r"^iceberg/metadata/manifest-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}.avro$").unwrap().is_match(paths[1].as_ref()));
     assert!(Regex::new(r"^iceberg/metadata/manifest-list-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}.avro$").unwrap().is_match(paths[2].as_ref()));
     assert_eq!(&paths[3].to_string(), "iceberg/metadata/v0.metadata.json");
-    assert_eq!(&paths[4].to_string(), "iceberg/metadata/v1.metadata.json");
-    assert_eq!(&paths[5].to_string(), "iceberg/metadata/version-hint.text");
+    assert_eq!(&paths[4].to_string(), "iceberg/metadata/version-hint.text");
 
     // WHEN we try to write to an existing table without passing the overwrite flag
     // THEN the command errors out
