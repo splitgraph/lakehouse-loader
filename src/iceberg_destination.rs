@@ -1,3 +1,4 @@
+use core::str;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -98,6 +99,7 @@ pub async fn record_batches_to_iceberg(
     record_batch_stream: impl TryStream<Item = Result<RecordBatch, DataLoadingError>>,
     arrow_schema: SchemaRef,
     target_url: Url,
+    overwrite: bool,
 ) -> Result<(), DataLoadingError> {
     pin_mut!(record_batch_stream);
 
@@ -108,27 +110,74 @@ pub async fn record_batches_to_iceberg(
     )?);
 
     let version_hint_location = format!("{}/metadata/version-hint.text", target_url);
-    if file_io.new_input(&version_hint_location)?.exists().await? {
-        return Err(DataLoadingError::IcebergError(iceberg::Error::new(
-            iceberg::ErrorKind::FeatureUnsupported,
-            "Iceberg table already exists. Writing to an existing table is not implemented",
-        )));
+    let version_hint_input = file_io.new_input(&version_hint_location)?;
+    let old_version_hint: Option<u64> = if version_hint_input.exists().await? {
+        if !overwrite {
+            return Err(DataLoadingError::IoError(std::io::Error::other(
+                "Table exists. Pass the overwrite flag to lakehouse-loader to overwrite data",
+            )));
+        }
+        let x = version_hint_input.read().await?;
+        let y: String = String::from_utf8(x.to_vec()).map_err(|_| {
+            DataLoadingError::IcebergError(iceberg::Error::new(
+                iceberg::ErrorKind::DataInvalid,
+                "Could not parse UTF-8 in version-hint.text",
+            ))
+        })?;
+        let z = y.trim().parse::<u64>().map_err(|_| {
+            DataLoadingError::IcebergError(iceberg::Error::new(
+                iceberg::ErrorKind::DataInvalid,
+                "Could not parse integer version in version-hint.text",
+            ))
+        })?;
+        Some(z)
+    } else {
+        None
     };
 
-    let metadata_v0 = create_metadata_v0(&iceberg_schema, target_url.to_string())?;
-    let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url);
-
-    file_io
-        .new_output(&metadata_v0_location)?
-        .write(serde_json::to_vec(&metadata_v0).unwrap().into())
-        .await?;
-    info!("Wrote v0 metadata: {:?}", metadata_v0_location);
+    let (old_metadata, old_metadata_location) = match old_version_hint {
+        Some(version_hint) => {
+            let old_metadata_location =
+                format!("{}/metadata/v{}.metadata.json", target_url, version_hint);
+            let old_metadata_bytes = file_io.new_input(&old_metadata_location)?.read().await?;
+            let old_metadata_string = str::from_utf8(&old_metadata_bytes).map_err(|_| {
+                DataLoadingError::IcebergError(iceberg::Error::new(
+                    iceberg::ErrorKind::DataInvalid,
+                    "Could not parse UTF-8 in old metadata file",
+                ))
+            })?;
+            let old_metadata =
+                serde_json::from_str::<TableMetadata>(old_metadata_string).map_err(|_| {
+                    DataLoadingError::IcebergError(iceberg::Error::new(
+                        iceberg::ErrorKind::DataInvalid,
+                        "Could not parse old metadata file",
+                    ))
+                })?;
+            if old_metadata.current_schema() != &iceberg_schema {
+                return Err(DataLoadingError::IcebergError(iceberg::Error::new(
+                    iceberg::ErrorKind::FeatureUnsupported,
+                    "Schema changes not supported",
+                )));
+            }
+            (old_metadata, old_metadata_location)
+        }
+        None => {
+            let metadata_v0 = create_metadata_v0(&iceberg_schema, target_url.to_string())?;
+            let metadata_v0_location = format!("{}/metadata/v0.metadata.json", target_url);
+            file_io
+                .new_output(&metadata_v0_location)?
+                .write_exclusive(serde_json::to_vec(&metadata_v0).unwrap().into())
+                .await?;
+            info!("Wrote v0 metadata: {:?}", metadata_v0_location);
+            (metadata_v0, metadata_v0_location)
+        }
+    };
 
     let file_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::builder().build(),
         iceberg_schema.clone(),
         file_io.clone(),
-        DefaultLocationGenerator::new(metadata_v0.clone()).unwrap(),
+        DefaultLocationGenerator::new(old_metadata.clone()).unwrap(),
         DefaultFileNameGenerator::new(
             "part".to_string(),
             Some(Uuid::new_v4().to_string()),
@@ -219,18 +268,25 @@ pub async fn record_batches_to_iceberg(
         })
         .build();
 
-    let metadata_v1 = create_metadata_v1(&metadata_v0, metadata_v0_location, snapshot)?;
-    let metadata_v1_location = format!("{}/metadata/v1.metadata.json", target_url);
+    let new_metadata = create_metadata_v1(&old_metadata, old_metadata_location, snapshot)?;
+    let new_version_hint = match old_version_hint {
+        Some(x) => x + 1,
+        None => 1,
+    };
+    let new_metadata_location = format!(
+        "{}/metadata/v{}.metadata.json",
+        target_url, new_version_hint
+    );
 
     file_io
-        .new_output(&metadata_v1_location)?
-        .write(serde_json::to_vec(&metadata_v1).unwrap().into())
+        .new_output(&new_metadata_location)?
+        .write_exclusive(serde_json::to_vec(&new_metadata).unwrap().into())
         .await?;
-    info!("Wrote v1 metadata: {:?}", metadata_v1_location);
+    info!("Wrote new metadata: {:?}", new_metadata_location);
 
     file_io
         .new_output(&version_hint_location)?
-        .write("1".to_string().into())
+        .write(new_version_hint.to_string().into())
         .await?;
     info!("Wrote version hint: {:?}", version_hint_location);
 

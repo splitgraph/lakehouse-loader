@@ -53,6 +53,8 @@ enum Commands {
     ParquetToIceberg {
         source_file: String,
         target_url: Url,
+        #[clap(long, short, action)]
+        overwrite: bool,
     },
     #[command(arg_required_else_help = true)]
     PgToIceberg {
@@ -60,6 +62,8 @@ enum Commands {
         target_url: Url,
         #[clap(long, short, action, help("SQL text to extract the data"))]
         query: String,
+        #[clap(long, short, action)]
+        overwrite: bool,
         #[clap(
             long,
             short,
@@ -111,6 +115,7 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
         Commands::ParquetToIceberg {
             source_file,
             target_url,
+            overwrite,
         } => {
             let file = tokio::fs::File::open(source_file).await?;
             let record_batch_reader = ParquetRecordBatchStreamBuilder::new(file)
@@ -123,6 +128,7 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
                 record_batch_reader.map_err(DataLoadingError::ParquetError),
                 schema,
                 target_url,
+                overwrite,
             )
             .await
         }
@@ -130,6 +136,7 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
             connection_string,
             target_url,
             query,
+            overwrite,
             batch_size,
         } => {
             let mut source = PgArrowSource::new(connection_string.as_ref(), &query, batch_size)
@@ -138,7 +145,8 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
             let arrow_schema = source.get_arrow_schema();
             let record_batch_stream = source.get_record_batch_stream();
             info!("Rowset schema: {}", arrow_schema);
-            record_batches_to_iceberg(record_batch_stream, arrow_schema, target_url).await
+            record_batches_to_iceberg(record_batch_stream, arrow_schema, target_url, overwrite)
+                .await
         }
     }
     // TODO
