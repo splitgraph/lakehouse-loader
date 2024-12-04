@@ -18,4 +18,6 @@ pub enum DataLoadingError {
     ObjectStoreError(#[from] object_store::Error),
     #[error("join error")]
     JoinError(#[from] tokio::task::JoinError),
+    #[error("optimistic concurrency error")]
+    OptimisticConcurrencyError(),
 }

@@ -1,5 +1,6 @@
 use core::str;
 use std::collections::HashMap;
+use std::error::Error;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -119,24 +120,24 @@ pub async fn record_batches_to_iceberg(
                 "Table exists. Pass the overwrite flag to lakehouse-loader to overwrite data",
             )));
         }
-        let x = version_hint_input.read().await?;
-        let y: String = String::from_utf8(x.to_vec()).map_err(|_| {
-            DataLoadingError::IcebergError(iceberg::Error::new(
-                iceberg::ErrorKind::DataInvalid,
-                "Could not parse UTF-8 in version-hint.text",
-            ))
-        })?;
-        let z = y.trim().parse::<u64>().map_err(|_| {
+        let version_hint_bytes = version_hint_input.read().await?;
+        let version_hint_string: String =
+            String::from_utf8(version_hint_bytes.to_vec()).map_err(|_| {
+                DataLoadingError::IcebergError(iceberg::Error::new(
+                    iceberg::ErrorKind::DataInvalid,
+                    "Could not parse UTF-8 in version-hint.text",
+                ))
+            })?;
+        let version_hint_u64 = version_hint_string.trim().parse::<u64>().map_err(|_| {
             DataLoadingError::IcebergError(iceberg::Error::new(
                 iceberg::ErrorKind::DataInvalid,
                 "Could not parse integer version in version-hint.text",
             ))
         })?;
-        Some(z)
+        Some(version_hint_u64)
     } else {
         None
     };
-
     let (previous_metadata, previous_metadata_location) = match old_version_hint {
         Some(version_hint) => {
             let old_metadata_location =
@@ -275,10 +276,20 @@ pub async fn record_batches_to_iceberg(
         target_url, new_version_hint
     );
 
-    file_io
+    if let Err(iceberg_error) = file_io
         .new_output(&new_metadata_location)?
         .write_exclusive(serde_json::to_vec(&new_metadata).unwrap().into())
-        .await?;
+        .await
+    {
+        if let Some(iceberg_error_source) = iceberg_error.source() {
+            if let Some(opendal_error) = iceberg_error_source.downcast_ref::<opendal::Error>() {
+                if opendal_error.kind() == opendal::ErrorKind::ConditionNotMatch {
+                    return Err(DataLoadingError::OptimisticConcurrencyError());
+                }
+            }
+        }
+        return Err(iceberg_error.into());
+    };
     info!("Wrote new metadata: {:?}", new_metadata_location);
 
     file_io
