@@ -75,6 +75,8 @@ enum Commands {
     },
 }
 
+const OPTIMISTIC_CONCURRENCY_RETRIES: u32 = 3;
+
 pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
     match args.command {
         Commands::ParquetToDelta {
@@ -117,20 +119,35 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
             target_url,
             overwrite,
         } => {
-            let file = tokio::fs::File::open(source_file).await?;
-            let record_batch_reader = ParquetRecordBatchStreamBuilder::new(file)
-                .await?
-                .build()
-                .unwrap();
-            let schema = record_batch_reader.schema().clone();
-            info!("File schema: {}", schema);
-            record_batches_to_iceberg(
-                record_batch_reader.map_err(DataLoadingError::ParquetError),
-                schema,
-                target_url,
-                overwrite,
-            )
-            .await
+            for _ in 0..OPTIMISTIC_CONCURRENCY_RETRIES {
+                let file = tokio::fs::File::open(&source_file).await?;
+                let record_batch_reader = ParquetRecordBatchStreamBuilder::new(file)
+                    .await?
+                    .build()
+                    .unwrap();
+                let arrow_schema = record_batch_reader.schema().clone();
+                info!("File schema: {}", arrow_schema);
+                match record_batches_to_iceberg(
+                    record_batch_reader.map_err(DataLoadingError::ParquetError),
+                    arrow_schema,
+                    target_url.clone(),
+                    overwrite,
+                )
+                .await
+                {
+                    Err(DataLoadingError::OptimisticConcurrencyError()) => {
+                        info!("Optimistic concurrency error. Retrying");
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                    Ok(_) => {
+                        break;
+                    }
+                }
+            }
+            Ok(())
         }
         Commands::PgToIceberg {
             connection_string,
@@ -139,14 +156,34 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
             overwrite,
             batch_size,
         } => {
-            let mut source = PgArrowSource::new(connection_string.as_ref(), &query, batch_size)
+            for _ in 0..OPTIMISTIC_CONCURRENCY_RETRIES {
+                let mut source = PgArrowSource::new(connection_string.as_ref(), &query, batch_size)
+                    .await
+                    .map_err(DataLoadingError::PostgresError)?;
+                let arrow_schema = source.get_arrow_schema();
+                let record_batch_stream = source.get_record_batch_stream();
+                info!("Rowset schema: {}", arrow_schema);
+                match record_batches_to_iceberg(
+                    record_batch_stream,
+                    arrow_schema,
+                    target_url.clone(),
+                    overwrite,
+                )
                 .await
-                .map_err(DataLoadingError::PostgresError)?;
-            let arrow_schema = source.get_arrow_schema();
-            let record_batch_stream = source.get_record_batch_stream();
-            info!("Rowset schema: {}", arrow_schema);
-            record_batches_to_iceberg(record_batch_stream, arrow_schema, target_url, overwrite)
-                .await
+                {
+                    Err(DataLoadingError::OptimisticConcurrencyError()) => {
+                        info!("Optimistic concurrency error. Retrying");
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                    Ok(_) => {
+                        break;
+                    }
+                }
+            }
+            Ok(())
         }
     }
     // TODO

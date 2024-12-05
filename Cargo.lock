@@ -1966,6 +1966,7 @@ dependencies = [
  "log",
  "native-tls",
  "object_store",
+ "opendal",
  "parquet",
  "postgres",
  "postgres-native-tls",
