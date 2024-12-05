@@ -203,7 +203,7 @@ pub async fn record_batches_to_iceberg(
         .collect();
 
     let snapshot_id = fastrand::i64(..);
-    let sequence_number = 1;
+    let sequence_number = previous_metadata.last_sequence_number() + 1;
 
     let manifest_file_path = format!("{}/metadata/manifest-{}.avro", target_url, Uuid::new_v4());
     let manifest_file_output = file_io.new_output(manifest_file_path)?;
