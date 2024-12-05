@@ -27,6 +27,14 @@ use uuid::Uuid;
 
 use crate::error::DataLoadingError;
 
+// Defines how to behave with existing tables
+#[derive(Debug, Clone, PartialEq)]
+enum WriteMode {
+    CreateExclusive, // Error out if the table already exists
+    Overwrite,       // Overwrite existing table data
+    Append,          // Append to existing table data
+}
+
 fn create_file_io(target_url: String) -> Result<FileIO, DataLoadingError> {
     let mut file_io_props: Vec<(String, String)> = vec![];
     if let Ok(aws_endpoint) = std::env::var("AWS_ENDPOINT") {
@@ -96,6 +104,18 @@ fn update_metadata_snapshot(
     Ok(new_metadata)
 }
 
+async fn get_manifest_files(
+    file_io: &FileIO,
+    table_metadata: &TableMetadata,
+) -> Result<Option<Vec<ManifestFile>>, DataLoadingError> {
+    let snapshot = match table_metadata.current_snapshot() {
+        None => return Ok(None),
+        Some(s) => s,
+    };
+    let manifest_list = snapshot.load_manifest_list(file_io, table_metadata).await?;
+    Ok(Some(manifest_list.consume_entries().into_iter().collect()))
+}
+
 const DEFAULT_SCHEMA_ID: i32 = 0;
 
 pub async fn record_batches_to_iceberg(
@@ -103,7 +123,19 @@ pub async fn record_batches_to_iceberg(
     arrow_schema: SchemaRef,
     target_url: Url,
     overwrite: bool,
+    append: bool,
 ) -> Result<(), DataLoadingError> {
+    let write_mode = match (overwrite, append) {
+        (false, false) => WriteMode::CreateExclusive,
+        (true, false) => WriteMode::Overwrite,
+        (false, true) => WriteMode::Append,
+        (true, true) => {
+            return Err(DataLoadingError::BadInputError(
+                "Cannot use overwrite flag with append flag".to_string(),
+            ));
+        }
+    };
+
     pin_mut!(record_batch_stream);
 
     let file_io = create_file_io(target_url.to_string())?;
@@ -115,7 +147,7 @@ pub async fn record_batches_to_iceberg(
     let version_hint_location = format!("{}/metadata/version-hint.text", target_url);
     let version_hint_input = file_io.new_input(&version_hint_location)?;
     let old_version_hint: Option<u64> = if version_hint_input.exists().await? {
-        if !overwrite {
+        if write_mode == WriteMode::CreateExclusive {
             return Err(DataLoadingError::IoError(std::io::Error::other(
                 "Table exists. Pass the overwrite flag to lakehouse-loader to overwrite data",
             )));
@@ -233,8 +265,20 @@ pub async fn record_batches_to_iceberg(
             })
             .collect(),
     );
-    let manifest_file: ManifestFile = manifest_writer.write(manifest).await?;
-    info!("Wrote manifest file: {:?}", manifest_file.manifest_path);
+    let new_manifest_file: ManifestFile = manifest_writer.write(manifest).await?;
+    info!("Wrote manifest file: {:?}", new_manifest_file.manifest_path);
+
+    let new_manifest_files_vec: Vec<ManifestFile> = match write_mode {
+        WriteMode::CreateExclusive | WriteMode::Overwrite => vec![new_manifest_file], // Only include new manifest
+        WriteMode::Append => match get_manifest_files(&file_io, &previous_metadata).await? {
+            Some(mut manifest_files) => {
+                // Include new manifest and all manifests from previous snapshot
+                manifest_files.push(new_manifest_file);
+                manifest_files
+            }
+            None => vec![new_manifest_file], // Only include new manifest
+        },
+    };
 
     let manifest_list_path = format!(
         "{}/metadata/manifest-list-{}.avro",
@@ -244,7 +288,7 @@ pub async fn record_batches_to_iceberg(
     let manifest_file_output = file_io.new_output(manifest_list_path.clone())?;
     let mut manifest_list_writer: ManifestListWriter =
         ManifestListWriter::v2(manifest_file_output, snapshot_id, None, sequence_number);
-    manifest_list_writer.add_manifests(vec![manifest_file].into_iter())?;
+    manifest_list_writer.add_manifests(new_manifest_files_vec.into_iter())?;
     manifest_list_writer.close().await?;
     info!("Wrote manifest list: {:?}", manifest_list_path);
 
