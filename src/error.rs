@@ -20,4 +20,6 @@ pub enum DataLoadingError {
     JoinError(#[from] tokio::task::JoinError),
     #[error("optimistic concurrency error")]
     OptimisticConcurrencyError(),
+    #[error("bad input error")]
+    BadInputError(String),
 }

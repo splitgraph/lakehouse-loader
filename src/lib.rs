@@ -55,6 +55,8 @@ enum Commands {
         target_url: Url,
         #[clap(long, short, action)]
         overwrite: bool,
+        #[clap(long, action)]
+        append: bool,
     },
     #[command(arg_required_else_help = true)]
     PgToIceberg {
@@ -64,6 +66,8 @@ enum Commands {
         query: String,
         #[clap(long, short, action)]
         overwrite: bool,
+        #[clap(long, action)]
+        append: bool,
         #[clap(
             long,
             short,
@@ -118,6 +122,7 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
             source_file,
             target_url,
             overwrite,
+            append,
         } => {
             for _ in 0..OPTIMISTIC_CONCURRENCY_RETRIES {
                 let file = tokio::fs::File::open(&source_file).await?;
@@ -126,12 +131,15 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
                     .build()
                     .unwrap();
                 let arrow_schema = record_batch_reader.schema().clone();
+                let record_batch_stream =
+                    record_batch_reader.map_err(DataLoadingError::ParquetError);
                 info!("File schema: {}", arrow_schema);
                 match record_batches_to_iceberg(
-                    record_batch_reader.map_err(DataLoadingError::ParquetError),
+                    record_batch_stream,
                     arrow_schema,
                     target_url.clone(),
                     overwrite,
+                    append,
                 )
                 .await
                 {
@@ -154,6 +162,7 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
             target_url,
             query,
             overwrite,
+            append,
             batch_size,
         } => {
             for _ in 0..OPTIMISTIC_CONCURRENCY_RETRIES {
@@ -168,6 +177,7 @@ pub async fn do_main(args: Cli) -> Result<(), DataLoadingError> {
                     arrow_schema,
                     target_url.clone(),
                     overwrite,
+                    append,
                 )
                 .await
                 {
