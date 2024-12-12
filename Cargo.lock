@@ -1963,6 +1963,7 @@ dependencies = [
  "fastrand",
  "futures",
  "iceberg",
+ "itertools",
  "log",
  "native-tls",
  "object_store",
