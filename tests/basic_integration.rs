@@ -140,35 +140,33 @@ async fn test_pg_to_iceberg() {
         Ok(_) => panic!("Expected command to fail but it succeeded"),
     };
 
-    // WHEN we try to write to an existing table with a different schema
+    // WHEN we try to write to an existing table with an incompatible schema
     // THEN the command errors out
     let args = vec![
         "lakehouse-loader",
         "pg-to-iceberg",
         "postgres://test-user:test-password@localhost:5432/test-db",
         "-q",
-        "select cint4, cint8 cint8_newname, ctext, cbool from t1 order by id",
+        "select cint4, cint8::text cint8_casted, ctext, cbool from t1 order by id",
         target_url,
         "--overwrite",
     ];
     match do_main(Cli::parse_from(args.clone())).await {
-        Err(DataLoadingError::IcebergError(e)) => {
-            assert!(e.kind() == iceberg::ErrorKind::FeatureUnsupported);
-        }
+        Err(DataLoadingError::BadInputError(_)) => {}
         Err(e) => {
             panic!("Unexpected error type: {:?}", e);
         }
         Ok(_) => panic!("Expected command to fail but it succeeded"),
     };
 
-    // WHEN we try to write to an existing table with the same schema
+    // WHEN we try to write to an existing table with a compatible schema
     // THEN the command succeeds
     let args = vec![
         "lakehouse-loader",
         "pg-to-iceberg",
         "postgres://test-user:test-password@localhost:5432/test-db",
         "-q",
-        "select cint4, cint8 + 1 cint8, ctext, cbool from t1 order by id",
+        "select cint4, cint8 + 1 cint8_renamed, ctext, cbool from t1 order by id",
         target_url,
         "--overwrite",
     ];

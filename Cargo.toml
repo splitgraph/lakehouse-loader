@@ -17,6 +17,7 @@ env_logger = "0.11.1"
 fastrand = "2.2.0"
 futures = "0.3"
 iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "e7008f39975ee2f09bc81a74d4ec5c9a3089580d" }
+itertools = "0.13.0"
 log = "0.4"
 native-tls = "0.2.11"
 object_store = { version = "0.11", features = ["aws"] }
