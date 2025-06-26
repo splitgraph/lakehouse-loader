@@ -11,17 +11,30 @@ Load data from Parquet and Postgres to Delta Lake
 
 Download the binary from the [Releases page](./releases)
 
-To load data from Postgres to Delta Lake:
+Load data from Postgres to Delta Lake:
 
 ```bash
 export PGPASSWORD="my_password"
-./lakehouse-loader pg-to-delta postgres://test-user@localhost:5432/test-db -q "SELECT * FROM some_table" s3://my-bucket/path/to/table
+./lakehouse-loader pg-to-delta postgres://test-user@localhost:5432/test-db -q "SELECT * FROM some_table" s3://my-bucket/path/to/delta/table
 ```
 
-To load data from Parquet to Delta Lake:
+Load data from Parquet to Delta Lake:
 
 ```bash
-./lakehouse-loader parquet-to-delta some_file.parquet s3://my-bucket/path/to/table
+./lakehouse-loader parquet-to-delta some_file.parquet s3://my-bucket/path/to/delta/table
+```
+
+Load data from Postgres to Iceberg File Catalog:
+
+```bash
+export PGPASSWORD="my_password"
+./lakehouse-loader pg-to-iceberg postgres://test-user@localhost:5432/test-db -q "SELECT * FROM some_table" s3://my-bucket/path/to/iceberg/table
+```
+
+Load data from Parquet to Iceberg File Catalog:
+
+```bash
+./lakehouse-loader parquet-to-iceberg some_file.parquet s3://my-bucket/path/to/iceberg/table
 ```
 
 Supports standard AWS environment variables (e.g. AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_PROFILE, AWS_ENDPOINT etc).

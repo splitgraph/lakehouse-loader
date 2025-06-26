@@ -441,7 +441,7 @@ pub async fn record_batches_to_delta(
     .await?;
 
     let delta_schema = deltalake::kernel::Schema::try_from(schema)?;
-    let table_name = target_url.path_segments().unwrap().last().unwrap();
+    let table_name = target_url.path_segments().unwrap().next_back().unwrap();
 
     let table = CreateBuilder::new()
         .with_log_store(log_store.clone())

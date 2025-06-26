@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16.9
     environment:
       POSTGRES_USER: test-user
       POSTGRES_PASSWORD: test-password
@@ -12,7 +12,7 @@ services:
       - ./tests/postgres-init-scripts:/docker-entrypoint-initdb.d
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z
     ports:
       - 9000:9000
       - 9001:9001
@@ -21,14 +21,20 @@ services:
     command: minio server /data
 
   minio-setup:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
     depends_on:
       - minio
     entrypoint: >
-      /bin/sh -c "
-      until (/usr/bin/mc config host add test-minio http://minio:9000 minioadmin minioadmin) do echo '...waiting...' && sleep 1; done;
+      /bin/sh -c '
+      mkdir ~/.mc;
+      echo ''{\"version\": \"10\", \"aliases\": {\"test-minio\": {\"url\": \"http://minio:9000\", \"accessKey\": \"minioadmin\", \"secretKey\": \"minioadmin\", \"api\": \"S3v4\", \"path\": \"auto\"}}}'' > ~/.mc/config.json;
+      cat ~/.mc/config.json;
       /usr/bin/mc rm -r --force test-minio/lhl-test-bucket;
       /usr/bin/mc mb test-minio/lhl-test-bucket;
       /usr/bin/mc admin user add test-minio test-user test-pass;
       /usr/bin/mc admin policy attach test-minio readwrite --user test-user;
-      exit 0; "
+      exit 0; '
+    healthcheck:
+      test: ["CMD", "false"] # Stack is not ready while the minio-setup container is up
+      interval: 10s
+      timeout: 5s
