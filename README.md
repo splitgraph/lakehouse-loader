@@ -40,8 +40,10 @@ Load data from Parquet to Iceberg File Catalog:
 Supports standard AWS environment variables (e.g. AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_PROFILE, AWS_ENDPOINT etc).
 
 Use the `file://` protocol to load data into a file instead.
+Use `--overwrite` to overwrite existing table data
+Use `--append` to append to an existing table
 
 ## Limitations
 
 - Supported datatypes: bool, char, int2, int4, int8, float4, float8, timestamp, timestamptz, date, text, bytea. Cast the columns in your query to `text` or another supported type if your query returns different types
-- Doesn't support appending to tables, only writing new Delta Tables (pass `-o` to overwrite)
+- Append is not supported for Delta tables
